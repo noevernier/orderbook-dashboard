@@ -4,15 +4,14 @@ from dash.dependencies import Input, Output
 import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
-import requests
 import datetime
 
-
 class OrderbookHeatmap:
-    def __init__(self):
+    def __init__(self, csv_file):
         self.app = dash.Dash(__name__)
         self.zmin = 0
-        self.zmax = 100
+        self.zmax = 300
+        self.csv_file = csv_file
         self.setup_layout()
         self.setup_callbacks()
         self.df = pd.DataFrame(columns=["timestamp", "price", "amount", "side"])
@@ -43,7 +42,7 @@ class OrderbookHeatmap:
                 ),
                 dcc.Interval(
                     id="interval-component",
-                    interval=1000,  # Update every 60 second
+                    interval=60*1000,  # Update every 60 seconds
                     n_intervals=0,
                 ),
             ],
@@ -66,19 +65,20 @@ class OrderbookHeatmap:
         def update_heatmap(n, z_range):
             self.zmin, self.zmax = z_range
 
-            data = requests.get("http://127.0.0.1:5000/snapshot/10/1000").json()
-            self.df = pd.concat([self.df, pd.DataFrame(data)], ignore_index=True)
-            # Filter out old data
-            self.df = self.df[
-                self.df.timestamp
-                > (datetime.datetime.now() - datetime.timedelta(minutes=10)).timestamp()
-                * 1e6
-            ]
+            self.df = pd.read_csv(self.csv_file)
+            self.df.columns = ["timestamp", "price", "amount", "side"]
+            
+            self.df["timestamp"] = pd.to_datetime(self.df["timestamp"], format="%Y-%m-%d %H:%M")
+            
+            recent_time_limit = datetime.datetime.now() - datetime.timedelta(minutes=100)
+            self.df = self.df[self.df["timestamp"] > recent_time_limit]
+                        
             return self.create_heatmap()
 
     def create_heatmap(self):
         if self.df.empty:
             return go.Figure()
+        
 
         df = (
             self.df.groupby(["timestamp", "price", "side"])
@@ -92,9 +92,9 @@ class OrderbookHeatmap:
         ) / 2
 
         all_prices = np.arange(
-            np.ceil(mid_price.min() * 0.98 / 10) * 10,
-            np.floor(mid_price.max() * 1.02 / 10) * 10 + 10,
-            10,
+            np.ceil(mid_price.min() * 0.98 / 20) * 20,
+            np.floor(mid_price.max() * 1.02 / 20) * 20 + 20,
+            20,
         )
         timestamps = df.timestamp.unique()
         heatmap_data = np.zeros((len(all_prices), len(timestamps)))
@@ -113,7 +113,7 @@ class OrderbookHeatmap:
         fig = go.Figure(
             data=go.Heatmap(
                 z=heatmap_data,
-                x=pd.to_datetime(timestamps, unit="us"),
+                x=timestamps,
                 y=all_prices,
                 colorscale="Viridis",
                 zmin=self.zmin,
@@ -126,7 +126,7 @@ class OrderbookHeatmap:
         # Midprice line
         fig.add_trace(
             go.Scatter(
-                x=pd.to_datetime(timestamps, unit="us"),
+                x=timestamps,
                 y=mid_price,
                 mode="lines",
                 line=dict(color="red", width=2),
@@ -190,4 +190,11 @@ class OrderbookHeatmap:
 
     def run(self):
         PORT = 8060
-        self.app.run_server(debug=False, port=PORT)
+        HOST = '0.0.0.0'
+        self.app.run_server(debug=False, port=PORT, host=HOST)
+
+
+# Utilisation de la classe
+csv_file = "data_snapshot.csv"
+heatmap = OrderbookHeatmap(csv_file)
+heatmap.run()
